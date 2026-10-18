@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traslados</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<style>
+:root{--bg:#eef2f5;--surface:#fff;--ink:#14232e;--muted:#5b6b78;--line:#d3dce3;--accent:#0b5c7a;--accent-ink:#fff;--warn:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1a22;--surface:#17252f;--ink:#e8eef2;--muted:#93a4b1;--line:#2b3d4a;--accent:#4fb4d8;--accent-ink:#06222e;--warn:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",Roboto,Arial,sans-serif}
+main{max-width:820px;margin:0 auto;padding:16px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+h1{font-size:1.4rem;margin:0}
+form,.list{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px}
+form{display:grid;gap:14px;margin-top:14px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+label{display:grid;gap:4px;font-weight:600;font-size:.9rem}
+input,textarea{font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);width:100%}
+input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.primary,.secondary{font:inherit;font-weight:600;padding:11px 16px;border-radius:6px;cursor:pointer;border:1px solid var(--accent)}
+.primary{background:var(--accent);color:var(--accent-ink)}
+.primary:disabled{opacity:.6;cursor:wait}
+.secondary{background:none;color:var(--accent)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.list{margin-top:20px}
+.list h2{font-size:1.05rem;margin:0 0 10px}
+.item{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:.92rem}
+.item small{color:var(--muted);display:block}
+.item button{background:none;border:0;color:var(--warn);cursor:pointer;font:inherit}
+.hint,.empty{color:var(--muted);margin:0;font-size:.88rem}
+[hidden]{display:none!important}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:6px;font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<div class="top">
+  <h1>Traslados</h1>
+  <button class="secondary" id="adm">Administrador</button>
+</div>
+
+<form id="f">
+  <div class="row">
+    <label>Código de reserva<input name="reserva" required></label>
+    <label>Cantidad de pasajeros<input name="pax" type="number" min="1" required></label>
+    <label>Empresa de traslado<input name="empresa" required></label>
+  </div>
+  <label>Motivo<textarea name="motivo" rows="2" required></textarea></label>
+  <div class="row">
+    <label>Desde<input name="desde" required></label>
+    <label>Hasta<input name="hasta" required></label>
+  </div>
+  <label>Imagen<input type="file" name="imagenes" multiple accept="image/*"></label>
+  <div class="actions"><button class="primary" type="submit">Guardar traslado</button></div>
+</form>
+
+<div id="admin" hidden>
+  <div class="actions" style="margin-top:20px">
+    <button class="primary" id="exp">Descargar Excel</button>
+    <button class="secondary" id="ref">Actualizar</button>
+    <button class="secondary" id="out">Cerrar sesión</button>
+  </div>
+  <div class="list" id="l"></div>
+</div>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $=s=>document.querySelector(s);
+let recs=[],KEY=sessionStorage.getItem('k')||'';
+function toast(m){const t=$('#toast');t.textContent=m;t.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>t.hidden=true,3500)}
+async function api(path,opt={}){
+  const r=await fetch('/api/'+path,{...opt,headers:{...(opt.headers||{}),'x-admin-key':KEY}});
+  if(!r.ok)throw new Error(r.status===401?'Clave incorrecta':((await r.json().catch(()=>({}))).error||r.status));
+  return r;
+}
+function readImg(f){
+  return new Promise(res=>{
+    const r=new FileReader();r.onerror=()=>res(null);
+    r.onload=()=>{const im=new Image();im.onload=()=>{
+      const k=Math.min(1,1000/Math.max(im.width,im.height)),c=document.createElement('canvas');
+      c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+      res({nombre:f.name.replace(/\.\w+$/,'')+'.jpg',type:'image/jpeg',dataUrl:c.toDataURL('image/jpeg',.75)});
+    };im.onerror=()=>res(null);im.src=r.result};
+    r.readAsDataURL(f);
+  });
+}
+$('#f').onsubmit=async e=>{
+  e.preventDefault();const form=e.target,btn=form.querySelector('.primary'),fd=new FormData(form);btn.disabled=true;
+  try{
+    const files=(await Promise.all([...form.imagenes.files].map(readImg))).filter(Boolean);
+    if(files.reduce((n,f)=>n+f.dataUrl.length,0)>5.4e6)throw new Error('Las imágenes pesan más de 4 MB. Cargalas en partes.');
+    const data={reserva:fd.get('reserva'),pax:fd.get('pax'),empresa:fd.get('empresa'),motivo:fd.get('motivo'),desde:fd.get('desde'),hasta:fd.get('hasta')};
+    await api('records',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'tras',data,files})});
+    form.reset();toast('Traslado guardado');if(KEY&&!$('#admin').hidden)load();
+  }catch(err){toast('No se pudo guardar: '+err.message)}
+  btn.disabled=false;
+};
+
+async function load(){
+  try{recs=await (await api('records')).json();render();return true}
+  catch(e){toast(e.message);return false}
+}
+function render(){
+  const arr=[...recs].reverse(),el=$('#l');
+  el.innerHTML=`<h2>Traslados cargados (${arr.length})</h2>`+(arr.length?'':'<p class="empty">Todavía no hay registros.</p>');
+  arr.forEach(r=>{
+    const d=document.createElement('div');d.className='item';
+    const a=document.createElement('div'),b=document.createElement('strong'),s=document.createElement('small');
+    b.textContent=`${r.data.reserva} · ${r.data.desde} a ${r.data.hasta}`;
+    s.textContent=`${r.data.empresa} · ${r.data.pax} pax · ${r.data.motivo} · ${r.files.length} imagen(es)`;
+    a.append(b,s);
+    const x=document.createElement('button');x.textContent='Eliminar';
+    x.onclick=async()=>{if(!confirm('¿Eliminar este traslado? No se puede deshacer.'))return;
+      try{await api('records/'+r.id,{method:'DELETE'});await load()}catch(err){toast(err.message)}};
+    d.append(a,x);el.append(d);
+  });
+}
+async function unlock(){
+  if(!KEY){KEY=prompt('Clave de administrador')||'';if(!KEY)return}
+  if(await load()){sessionStorage.setItem('k',KEY);$('#admin').hidden=false;$('#adm').hidden=true}
+  else{KEY='';sessionStorage.removeItem('k')}
+}
+$('#adm').onclick=unlock;
+$('#ref').onclick=load;
+$('#out').onclick=()=>{KEY='';sessionStorage.removeItem('k');recs=[];$('#admin').hidden=true;$('#adm').hidden=false};
+if(KEY)unlock();
+
+const toB64=b=>new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(b)});
+$('#exp').onclick=async()=>{
+  const btn=$('#exp');btn.disabled=true;
+  try{
+    if(!await load())throw new Error('Sesión vencida');
+    if(!recs.length){toast('No hay traslados para exportar.');btn.disabled=false;return}
+    const wb=new ExcelJS.Workbook(),ws=wb.addWorksheet('Traslados');
+    const cols=[['Fecha de carga',18],['Reserva',14],['Pasajeros',10],['Empresa de traslado',24],['Motivo',30],['Desde',18],['Hasta',18]];
+    ws.columns=cols.map(([h,w])=>({header:h,width:w}));
+    ws.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};
+    ws.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0B5C7A'}};
+    let maxF=0;
+    for(const [i,r] of recs.entries()){
+      const d=r.data,row=ws.addRow([new Date(r.ts).toLocaleString('es-AR'),d.reserva,+d.pax,d.empresa,d.motivo,d.desde,d.hasta]);
+      row.alignment={vertical:'top',wrapText:true};maxF=Math.max(maxF,r.files.length);
+      if(r.files.length)row.height=110;
+      for(const [j,f] of r.files.entries()){
+        const blob=await (await api('files/'+f.id)).blob();
+        ws.addImage(wb.addImage({base64:await toB64(blob),extension:'jpeg'}),{tl:{col:cols.length+j,row:i+1},ext:{width:140,height:105}});
+      }
+    }
+    for(let j=0;j<maxF;j++)ws.getColumn(cols.length+1+j).width=24;
+    if(maxF)ws.getCell(1,cols.length+1).value='Imágenes';
+    const buf=await wb.xlsx.writeBuffer(),a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download='traslados_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    a.click();URL.revokeObjectURL(a.href);toast('Excel descargado');
+  }catch(e){toast('No se pudo generar el Excel: '+e.message)}
+  btn.disabled=false;
+};
+</script>
+</body>
+</html>
